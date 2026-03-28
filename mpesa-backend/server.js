@@ -1,19 +1,26 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ✅ Safaricom Credentials (keep these safe in production)
+// 🔐 Safaricom Credentials
 const CONSUMER_KEY = "8yNvxmCqiA7Emf8iz7MBoMNWYGGibTNlIQsexEAsmIfpUDCj";
 const CONSUMER_SECRET = "XChBSv2tYMsxoNgrX5plQBivT0DmD2BlcITmVlduqWcF2HZAUXisBi7M6ALjoFL0";
 const SHORTCODE = "174379";
 const PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
 
-// ✅ Replace with your Render backend URL after deploy
-const BASE_URL = "https://mpesa-backend.onrender.com";
+// 🌐 Backend URL
+const BASE_URL = "https://canteen-system-backend.onrender.com";
+
+// 🔥 SUPABASE (PASTE YOUR KEYS HERE)
+const supabase = createClient(
+  "https://hbofboaoixzxqzouncyj.supabase.co",   // 👈 paste URL
+  "sb_publishable_Hgp6-35ojerC2XGJVfq2yg_cyTd3L4I"               // 👈 paste service key
+);
 
 // --- GET ACCESS TOKEN ---
 const getAccessToken = async () => {
@@ -51,7 +58,7 @@ app.post('/stkpush', async (req, res) => {
                 PartyB: SHORTCODE,
                 PhoneNumber: phone,
                 CallBackURL: `${BASE_URL}/callback`,
-                AccountReference: order_id, // ✅ VERY IMPORTANT
+                AccountReference: order_id,
                 TransactionDesc: "Food Order " + order_id
             },
             {
@@ -59,10 +66,12 @@ app.post('/stkpush', async (req, res) => {
             }
         );
 
+        console.log("📤 STK SENT:", response.data);
+
         res.status(200).json(response.data);
 
     } catch (error) {
-        console.error("STK ERROR:", error.response?.data || error.message);
+        console.error("❌ STK ERROR:", error.response?.data || error.message);
         res.status(500).json(error.response?.data || { error: "STK failed" });
     }
 });
@@ -85,36 +94,53 @@ app.post('/callback', async (req, res) => {
 
             let phone = "";
             let amount = "";
+            let mpesaCode = "";
 
             metadata.forEach(item => {
                 if (item.Name === "PhoneNumber") phone = item.Value;
                 if (item.Name === "Amount") amount = item.Value;
+                if (item.Name === "MpesaReceiptNumber") mpesaCode = item.Value;
             });
 
-            // ⚠️ IMPORTANT: order_id comes from AccountReference
-            const orderId = stkCallback.CallbackMetadata.Item.find(
-                i => i.Name === "AccountReference"
-            )?.Value;
-
-            console.log("📦 Order ID:", orderId);
             console.log("📱 Phone:", phone);
             console.log("💰 Amount:", amount);
+            console.log("🧾 Receipt:", mpesaCode);
 
-            // 👉 NEXT STEP: update Supabase here
+            // 🔥 UPDATE SUPABASE (MAIN LOGIC)
+            const { error } = await supabase
+              .from("orders")
+              .update({
+                payment_status: "Paid",
+                status: "Confirmed",
+                mpesa_code: mpesaCode
+              })
+              .eq("phone", phone)
+              .eq("payment_status", "Pending");
+
+            if(error){
+              console.error("❌ DB UPDATE ERROR:", error);
+            } else {
+              console.log("✅ ORDER UPDATED TO PAID");
+            }
 
         } else {
-            console.log("❌ PAYMENT FAILED");
+            console.log("❌ PAYMENT FAILED:", stkCallback.ResultDesc);
         }
 
         res.sendStatus(200);
 
     } catch (error) {
-        console.error(error);
+        console.error("❌ CALLBACK ERROR:", error);
         res.sendStatus(500);
     }
 });
 
-// --- SERVER START ---
+// --- HEALTH CHECK ---
+app.get('/', (req, res) => {
+    res.send("🚀 Backend is running");
+});
+
+// --- START SERVER ---
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
