@@ -16,11 +16,14 @@ const PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c91
 // 🌐 Backend URL
 const BASE_URL = "https://canteen-system-backend.onrender.com";
 
-// 🔥 SUPABASE (PASTE YOUR KEYS HERE)
+// 🔥 SUPABASE (⚠️ USE SERVICE ROLE KEY HERE)
 const supabase = createClient(
-  "https://hbofboaoixzxqzouncyj.supabase.co",   // 👈 paste URL
-  "sb_publishable_Hgp6-35ojerC2XGJVfq2yg_cyTd3L4I"               // 👈 paste service key
+  "https://hbofboaoixzxqzouncyj.supabase.co",
+  process.env.SUPABASE_KEY
 );
+
+// 🔥 TEMP STORAGE (maps payment → order)
+const pendingOrders = {};
 
 // --- GET ACCESS TOKEN ---
 const getAccessToken = async () => {
@@ -68,6 +71,9 @@ app.post('/stkpush', async (req, res) => {
 
         console.log("📤 STK SENT:", response.data);
 
+        // 🔥 SAVE MAPPING
+        pendingOrders[response.data.CheckoutRequestID] = order_id;
+
         res.status(200).json(response.data);
 
     } catch (error) {
@@ -90,37 +96,45 @@ app.post('/callback', async (req, res) => {
 
             console.log("✅ PAYMENT SUCCESS");
 
-            const metadata = stkCallback.CallbackMetadata.Item;
+            const checkoutId = stkCallback.CheckoutRequestID;
+            const orderId = pendingOrders[checkoutId];
 
-            let phone = "";
-            let amount = "";
+            // 🔥 EXTRACT RECEIPT
+            const metadata = stkCallback.CallbackMetadata?.Item || [];
+
             let mpesaCode = "";
+            let amount = "";
+            let phone = "";
 
             metadata.forEach(item => {
-                if (item.Name === "PhoneNumber") phone = item.Value;
-                if (item.Name === "Amount") amount = item.Value;
                 if (item.Name === "MpesaReceiptNumber") mpesaCode = item.Value;
+                if (item.Name === "Amount") amount = item.Value;
+                if (item.Name === "PhoneNumber") phone = item.Value;
             });
 
-            console.log("📱 Phone:", phone);
-            console.log("💰 Amount:", amount);
             console.log("🧾 Receipt:", mpesaCode);
 
-            // 🔥 UPDATE SUPABASE (MAIN LOGIC)
-            const { error } = await supabase
-              .from("orders")
-              .update({
-                payment_status: "Paid",
-                status: "Confirmed",
-                mpesa_code: mpesaCode
-              })
-              .eq("phone", phone)
-              .eq("payment_status", "Pending");
+            if(orderId){
 
-            if(error){
-              console.error("❌ DB UPDATE ERROR:", error);
+                const { error } = await supabase
+                  .from("orders")
+                  .update({
+                    payment_status: "Paid",
+                    status: "Confirmed",
+                    mpesa_code: mpesaCode
+                  })
+                  .eq("id", orderId);
+
+                if(error){
+                  console.error("❌ DB UPDATE ERROR:", error);
+                } else {
+                  console.log("✅ CORRECT ORDER UPDATED");
+                }
+
+                delete pendingOrders[checkoutId];
+
             } else {
-              console.log("✅ ORDER UPDATED TO PAID");
+                console.log("⚠️ Order not found for this payment");
             }
 
         } else {
